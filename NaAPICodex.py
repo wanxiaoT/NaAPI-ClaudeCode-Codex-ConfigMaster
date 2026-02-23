@@ -203,12 +203,20 @@ class ConfigTool:
         available = set(tkfont.families(self.root))
 
         ui_family = next(
-            (n for n in ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"] if n in available),
-            "Segoe UI",
+            (n for n in [
+                "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI",  # Windows
+                "PingFang SC", "Hiragino Sans GB", "SF Pro Text",      # macOS
+                "Noto Sans CJK SC",                                    # Linux
+            ] if n in available),
+            "TkDefaultFont",
         )
         mono_family = next(
-            (n for n in ["Cascadia Mono", "Consolas", "Courier New"] if n in available),
-            "Consolas",
+            (n for n in [
+                "Cascadia Mono", "Consolas",   # Windows
+                "Menlo", "SF Mono",            # macOS
+                "DejaVu Sans Mono",            # Linux
+            ] if n in available),
+            "TkFixedFont",
         )
         self.font_ui = ctk.CTkFont(family=ui_family, size=12)
         self.font_ui_bold = ctk.CTkFont(family=ui_family, size=12, weight="bold")
@@ -326,13 +334,16 @@ class ConfigTool:
         card.grid(row=row, column=0, sticky="ew", pady=(8, 0))
         card.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            card, text=title, font=self.font_section, anchor="w",
-            text_color="#1a1a2e",
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+        content_row = 0
+        if title:
+            ctk.CTkLabel(
+                card, text=title, font=self.font_section, anchor="w",
+                text_color="#1a1a2e",
+            ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+            content_row = 1
 
         content = ctk.CTkFrame(card, fg_color="transparent")
-        content.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        content.grid(row=content_row, column=0, sticky="ew", padx=12, pady=(8, 10))
         content.columnconfigure(1, weight=1)
         return content
 
@@ -381,27 +392,23 @@ class ConfigTool:
         ).grid(row=0, column=1, sticky="e")
 
         # API 密钥
-        auth = self._create_section(parent, "API 密钥", 1)
-        auth.columnconfigure(0, weight=1)
-        auth.columnconfigure(1, weight=0)
+        auth = self._create_section(parent, None, 1)
 
-        # 第一行：标签和操作按钮
-        ctk.CTkLabel(auth, text="API KEY", font=self.font_ui_bold, anchor="w").grid(
-            row=0, column=0, sticky="w",
-        )
-        auth_actions = ctk.CTkFrame(auth, fg_color="transparent")
-        auth_actions.grid(row=0, column=1, sticky="e")
-        ctk.CTkButton(
-            auth_actions, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
-            command=lambda: self._paste_from_clipboard(self.codex_api_key_var),
-        ).grid(row=0, column=0, padx=(0, 6))
+        # 第一行：标签和操作按钮（用 pack 保证严格贴边）
+        auth_top = ctk.CTkFrame(auth, fg_color="transparent")
+        auth_top.grid(row=0, column=0, columnspan=2, sticky="ew")
+        ctk.CTkLabel(auth_top, text="API KEY", font=self.font_ui_bold, anchor="w").pack(side="left")
         ctk.CTkCheckBox(
-            auth_actions, text="显示", variable=self.codex_show_api_key_var,
+            auth_top, text="显示", variable=self.codex_show_api_key_var,
             command=lambda: self._set_secret_visibility(
                 self.codex_api_key_entry, self.codex_show_api_key_var,
             ),
             font=self.font_subtitle,
-        ).grid(row=0, column=1)
+        ).pack(side="right")
+        ctk.CTkButton(
+            auth_top, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
+            command=lambda: self._paste_from_clipboard(self.codex_api_key_var),
+        ).pack(side="right", padx=(0, 6))
 
         # 第二行：输入框铺满
         self.codex_api_key_entry = ctk.CTkEntry(
@@ -412,41 +419,33 @@ class ConfigTool:
         # 模型与参数
         settings = self._create_section(parent, "模型与参数", 2)
 
-        ctk.CTkLabel(settings, text="Base URL", font=self.font_ui, width=80, anchor="w").grid(
-            row=0, column=0, sticky="w",
-        )
-        ctk.CTkEntry(
-            settings, textvariable=self.codex_base_url_var, font=self.font_mono,
-            placeholder_text="https://naapi.cc/v1",
-        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
-
         ctk.CTkLabel(settings, text="模型选择", font=self.font_ui, width=80, anchor="w").grid(
-            row=1, column=0, sticky="w", pady=(6, 0),
+            row=0, column=0, sticky="w",
         )
         self.codex_model_combo = _StyledDropdown(
             settings, variable=self.codex_model_var,
             values=self.codex_model_list,
             font=self.font_mono,
         )
-        self.codex_model_combo.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+        self.codex_model_combo.grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
         ctk.CTkLabel(settings, text="推理力度", font=self.font_ui, width=80, anchor="w").grid(
-            row=2, column=0, sticky="w", pady=(6, 0),
+            row=1, column=0, sticky="w", pady=(6, 0),
         )
         _StyledDropdown(
             settings, variable=self.codex_reasoning_var,
             values=["auto", "low", "medium", "high", "xhigh"],
             font=self.font_mono,
-        ).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
 
         ctk.CTkLabel(settings, text="详细程度", font=self.font_ui, width=80, anchor="w").grid(
-            row=3, column=0, sticky="w", pady=(6, 0),
+            row=2, column=0, sticky="w", pady=(6, 0),
         )
         _StyledDropdown(
             settings, variable=self.codex_verbosity_var,
             values=["low", "medium", "high"],
             font=self.font_mono,
-        ).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+        ).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
 
         # 文件路径
         files = self._create_section(parent, "文件位置", 3)
@@ -477,27 +476,23 @@ class ConfigTool:
         ).grid(row=0, column=1, sticky="e")
 
         # API 密钥
-        auth = self._create_section(parent, "API 密钥", 1)
-        auth.columnconfigure(0, weight=1)
-        auth.columnconfigure(1, weight=0)
+        auth = self._create_section(parent, None, 1)
 
-        # 第一行：标签和操作按钮
-        ctk.CTkLabel(auth, text="API KEY", font=self.font_ui_bold, anchor="w").grid(
-            row=0, column=0, sticky="w",
-        )
-        auth_actions = ctk.CTkFrame(auth, fg_color="transparent")
-        auth_actions.grid(row=0, column=1, sticky="e")
-        ctk.CTkButton(
-            auth_actions, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
-            command=lambda: self._paste_from_clipboard(self.claude_token_var),
-        ).grid(row=0, column=0, padx=(0, 6))
+        # 第一行：标签和操作按钮（用 pack 保证严格贴边）
+        auth_top = ctk.CTkFrame(auth, fg_color="transparent")
+        auth_top.grid(row=0, column=0, columnspan=2, sticky="ew")
+        ctk.CTkLabel(auth_top, text="API KEY", font=self.font_ui_bold, anchor="w").pack(side="left")
         ctk.CTkCheckBox(
-            auth_actions, text="显示", variable=self.claude_show_token_var,
+            auth_top, text="显示", variable=self.claude_show_token_var,
             command=lambda: self._set_secret_visibility(
                 self.claude_token_entry, self.claude_show_token_var,
             ),
             font=self.font_subtitle,
-        ).grid(row=0, column=1)
+        ).pack(side="right")
+        ctk.CTkButton(
+            auth_top, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
+            command=lambda: self._paste_from_clipboard(self.claude_token_var),
+        ).pack(side="right", padx=(0, 6))
 
         # 第二行：输入框铺满
         self.claude_token_entry = ctk.CTkEntry(
@@ -549,7 +544,7 @@ class ConfigTool:
         self._resize_job = None
         self._is_resizing = False
         self._prev_size = None
-        self.root.bind("<Configure>", self._on_configure)
+        self.root.bind("<Configure>", self._on_configure, add="+")
 
     def _on_configure(self, event):
         if event.widget is not self.root:
@@ -891,8 +886,8 @@ requires_openai_auth = true
 
     def run(self):
         """运行程序"""
-        width = 520
-        height = 600
+        width = 500
+        height = 675
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
