@@ -1,0 +1,70 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            sep: ';'
+          - os: macos-latest
+            sep: ':'
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyinstaller customtkinter Pillow
+
+      - name: Build
+        shell: bash
+        run: |
+          ARGS="--onefile --windowed --collect-all customtkinter --name NaAPICodex"
+          [ -d assets ] && ARGS="$ARGS --add-data assets${{ matrix.sep }}assets"
+          [ -f naapigpt ] && ARGS="$ARGS --add-data naapigpt${{ matrix.sep }}."
+          pyinstaller $ARGS NaAPICodex.py
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          cd dist
+          if [ -d NaAPICodex.app ]; then
+            zip -r NaAPICodex-macOS.zip NaAPICodex.app
+            rm -rf NaAPICodex.app
+          fi
+          if [ -f NaAPICodex.exe ]; then
+            mv NaAPICodex.exe NaAPICodex-Windows.exe
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ runner.os }}
+          path: dist/NaAPICodex-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: NaAPICodex-*
