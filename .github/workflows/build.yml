@@ -29,10 +29,28 @@ jobs:
       - name: Install dependencies
         run: pip install pyinstaller customtkinter Pillow
 
+      - name: Generate macOS icon
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p assets/icon.iconset
+          sips -z 1024 1024 assets/icon.jpg --out assets/icon_1024.png
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size assets/icon_1024.png --out "assets/icon.iconset/icon_${size}x${size}.png"
+            double=$((size * 2))
+            sips -z $double $double assets/icon_1024.png --out "assets/icon.iconset/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns assets/icon.iconset -o assets/icon.icns
+          rm -rf assets/icon.iconset assets/icon_1024.png
+
       - name: Build
         shell: bash
         run: |
-          ARGS="--onefile --windowed --collect-all customtkinter --icon assets/icon.ico --name NaAPICodex"
+          ARGS="--onefile --windowed --collect-all customtkinter --name NaAPICodex"
+          if [ -f assets/icon.icns ]; then
+            ARGS="$ARGS --icon assets/icon.icns"
+          elif [ -f assets/icon.ico ]; then
+            ARGS="$ARGS --icon assets/icon.ico"
+          fi
           [ -d assets ] && ARGS="$ARGS --add-data assets${{ matrix.sep }}assets"
           [ -f naapigpt ] && ARGS="$ARGS --add-data naapigpt${{ matrix.sep }}."
           pyinstaller $ARGS NaAPICodex.py
