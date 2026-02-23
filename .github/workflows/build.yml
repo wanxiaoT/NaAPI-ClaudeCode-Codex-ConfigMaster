@@ -41,7 +41,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          ARGS="--onefile --windowed --collect-all customtkinter --name NaAPICodex"
+          ARGS="--onefile --windowed --collect-all customtkinter --exclude-module PIL._avif --name NaAPICodex"
           if [ -f assets/icon.icns ]; then
             ARGS="$ARGS --icon assets/icon.icns"
           elif [ -f assets/icon.ico ]; then
