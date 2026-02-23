@@ -45,7 +45,7 @@ except Exception:
 # ============ 默认配置 ============
 CODEX_BASE_URL = "https://naapi.cc/v1"
 CODEX_MODEL = "gpt-5.2"
-CODEX_REASONING = "auto"
+CODEX_REASONING = "xhigh"
 CODEX_VERBOSITY = "high"
 
 CLAUDE_BASE_URL = "https://naapi.cc"
@@ -482,7 +482,7 @@ class ConfigTool:
         auth.columnconfigure(1, weight=0)
 
         # 第一行：标签和操作按钮
-        ctk.CTkLabel(auth, text="认证令牌", font=self.font_ui_bold, anchor="w").grid(
+        ctk.CTkLabel(auth, text="API KEY", font=self.font_ui_bold, anchor="w").grid(
             row=0, column=0, sticky="w",
         )
         auth_actions = ctk.CTkFrame(auth, fg_color="transparent")
@@ -641,7 +641,39 @@ class ConfigTool:
             self._current_toast = None
 
     def show_about(self):
-        self._show_toast("钠API 配置工具\n作者：wanxiaoT\n官网：naapi.cc", "info", 5000)
+        import webbrowser
+
+        about = ctk.CTkToplevel(self.root)
+        about.title("关于")
+        about.resizable(False, False)
+        about.attributes("-topmost", True)
+        about.configure(fg_color="#ffffff")
+
+        # 居中于主窗口
+        about.update_idletasks()
+        w, h = 300, 180
+        rx = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        ry = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        about.geometry(f"{w}x{h}+{rx}+{ry}")
+
+        ctk.CTkLabel(
+            about, text="钠API 配置工具", font=self.font_title, text_color="#101828",
+        ).pack(pady=(20, 4))
+        ctk.CTkLabel(
+            about, text="作者：wanxiaoT", font=self.font_ui, text_color="#6b7280",
+        ).pack()
+
+        link = ctk.CTkLabel(
+            about, text="官网：naapi.cc", font=self.font_ui,
+            text_color="#3b82f6", cursor="hand2",
+        )
+        link.pack(pady=(2, 0))
+        link.bind("<Button-1>", lambda e: webbrowser.open("https://naapi.cc"))
+
+        ctk.CTkButton(
+            about, text="关闭", width=80, **self.SECONDARY_BTN,
+            command=about.destroy,
+        ).pack(pady=(16, 0))
 
     def _copy_to_clipboard(self, text, status_message="已复制到剪贴板"):
         try:
