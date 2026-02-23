@@ -1,47 +1,177 @@
 """
-NAAPI 配置工具 - 简化版
+NAAPI 配置工具 - 现代版
 用于配置 Codex 和 Claude Code 的图形界面工具
 """
 import json
-import ctypes
 import os
 import re
+import signal
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 from pathlib import Path
 
-# 解决 Windows 高分辨率屏幕显示模糊问题
 try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    import customtkinter as ctk
+except ImportError:
+    tkroot = tk.Tk()
+    tkroot.withdraw()
+    messagebox.showerror("缺少依赖", "请先安装 customtkinter:\npip install customtkinter")
+    sys.exit(1)
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+
+def _resource_path(relative_path):
+    """获取资源文件的绝对路径（兼容 PyInstaller 打包）"""
+    if getattr(sys, "frozen", False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+
+# 获取系统 DPI 缩放（针对 Windows）
+try:
+    from ctypes import windll
+    windll.shcore.SetProcessDpiAwareness(1)
 except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    pass
 
 # ============ 默认配置 ============
-# Codex 默认配置
 CODEX_BASE_URL = "https://naapi.cc/v1"
 CODEX_MODEL = "gpt-5.2"
-CODEX_REASONING = "xhigh"  # 推理强度: low, medium, high, xhigh
-CODEX_VERBOSITY = "high"   # 详细程度: low, medium, high
+CODEX_REASONING = "auto"
+CODEX_VERBOSITY = "high"
 
-# Claude Code 默认配置
 CLAUDE_BASE_URL = "https://naapi.cc"
 CLAUDE_OPUS_MODEL = "claude-opus-4-6-thinking"
-CLAUDE_DISABLE_TRAFFIC = True   # 禁用非必要流量
+CLAUDE_DISABLE_TRAFFIC = True
+
+# 外观
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
+
+
+class _StyledDropdown(ctk.CTkFrame):
+    """现代风格下拉选择器，替代原生 ComboBox"""
+
+    def __init__(self, master, variable, values, font=None, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self._var = variable
+        self._values = list(values)
+        self._popup = None
+        self._font = font
+        self._root_bind_id = None
+        self.columnconfigure(0, weight=1)
+
+        self._entry = ctk.CTkEntry(self, textvariable=variable, font=font)
+        self._entry.grid(row=0, column=0, sticky="ew")
+
+        self._btn = ctk.CTkButton(
+            self, text="\u25be", width=28,
+            fg_color="#eff6ff", hover_color="#dbeafe",
+            text_color="#3b82f6", corner_radius=6,
+            command=self._toggle,
+        )
+        self._btn.grid(row=0, column=1, padx=(4, 0))
+
+    def _toggle(self):
+        if self._popup and self._popup.winfo_exists():
+            self._close()
+        else:
+            self._open()
+
+    def _open(self):
+        self.update_idletasks()
+        self._popup = ctk.CTkToplevel(self)
+        self._popup.overrideredirect(True)
+        self._popup.attributes("-topmost", True)
+
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + 4
+        w = self.winfo_width()
+        h = min(300, len(self._values) * 32 + 20)
+
+        # 如果下方空间不够则向上弹出
+        if y + h > self.winfo_screenheight() - 40:
+            y = self.winfo_rooty() - h - 4
+
+        self._popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        scroll = ctk.CTkScrollableFrame(
+            self._popup, fg_color="#ffffff",
+            corner_radius=8, border_width=1, border_color="#e5e7eb",
+        )
+        scroll.pack(fill="both", expand=True)
+
+        current = self._var.get()
+        for val in self._values:
+            selected = val == current
+            btn = ctk.CTkButton(
+                scroll, text=val, anchor="w", height=28, corner_radius=4,
+                fg_color="#eff6ff" if selected else "transparent",
+                text_color="#1e40af" if selected else "#374151",
+                hover_color="#dbeafe", font=self._font,
+                command=lambda v=val: self._select(v),
+            )
+            btn.pack(fill="x", padx=4, pady=1)
+
+        self._root_bind_id = self.winfo_toplevel().bind(
+            "<Button-1>", self._check_click, add="+",
+        )
+
+    def _select(self, value):
+        self._var.set(value)
+        self._close()
+
+    def _close(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+        self._popup = None
+        if self._root_bind_id:
+            try:
+                self.winfo_toplevel().unbind("<Button-1>", self._root_bind_id)
+            except Exception:
+                pass
+            self._root_bind_id = None
+
+    def _check_click(self, event):
+        if not self._popup or not self._popup.winfo_exists():
+            self._close()
+            return
+        for widget in (self._popup, self._btn):
+            try:
+                wx, wy = widget.winfo_rootx(), widget.winfo_rooty()
+                ww, wh = widget.winfo_width(), widget.winfo_height()
+                if wx <= event.x_root <= wx + ww and wy <= event.y_root <= wy + wh:
+                    return
+            except Exception:
+                pass
+        self._close()
 
 
 class ConfigTool:
     """配置工具主类"""
 
+    SECONDARY_BTN = {
+        "fg_color": "transparent",
+        "border_width": 1,
+        "border_color": "#d0d5dd",
+        "hover_color": "#f2f4f7",
+        "text_color": "#344054",
+    }
+
     def __init__(self):
-        # 创建主窗口
-        self.root = tk.Tk()
+        self.root = ctk.CTk()
         self.root.title("钠API 配置工具")
+        self.root.configure(fg_color="#ffffff")
         self.root.resizable(True, True)
+        self._set_icon()
 
         # 配置文件路径
         home = Path.home()
@@ -51,64 +181,45 @@ class ConfigTool:
         self.claude_dir = home / ".claude"
         self.claude_config = self.claude_dir / "settings.json"
 
-        # 界面状态
-        self._configure_style()
+        self._setup_fonts()
         self._init_vars()
-
-        # 构建界面
         self._build_ui()
 
-    def _configure_style(self):
-        """配置 ttk 主题与基础样式"""
-        self.style = ttk.Style(self.root)
-
-        theme_names = set(self.style.theme_names())
-        if sys.platform.startswith("win") and "vista" in theme_names:
-            self.style.theme_use("vista")
-        elif "clam" in theme_names:
-            self.style.theme_use("clam")
-
-        ui_family = self._choose_font_family(["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"])
-        mono_family = self._choose_font_family(["Cascadia Mono", "Consolas", "Courier New"])
-
-        self.font_ui = (ui_family, 10)
-        self.font_title = (ui_family, 18, "bold")
-        self.font_subtitle = (ui_family, 10)
-        self.font_ui_bold = (ui_family, 10, "bold")
-        self.font_mono = (mono_family, 10)
-
-        self.style.configure(".", font=self.font_ui)
-        self.style.configure("Title.TLabel", font=self.font_title)
-        self.style.configure("Subtitle.TLabel", font=self.font_subtitle, foreground="#6B7280")
-        self.style.configure("Status.TLabel", foreground="#6B7280")
-
-        self.style.configure("Section.TLabelframe", padding=12)
-        self.style.configure("Section.TLabelframe.Label", font=self.font_ui_bold)
-
-        self.style.configure("TNotebook.Tab", padding=(12, 6))
-        self.style.configure("TButton", padding=(10, 6))
-        self.style.configure("Primary.TButton", font=self.font_ui_bold)
-
-        self.style.configure("Mono.TEntry", font=self.font_mono)
-        self.style.configure("Path.TEntry", font=(mono_family, 9))
-
-    def _choose_font_family(self, candidates):
-        """从候选字体中选择可用字体"""
+    def _set_icon(self):
+        """设置窗口图标"""
         try:
-            import tkinter.font as tkfont
-
-            default_family = tkfont.nametofont("TkDefaultFont").actual("family")
-            available = set(tkfont.families(self.root))
-            for name in candidates:
-                if name in available:
-                    return name
-            return default_family
+            icon_path = _resource_path(os.path.join("assets", "icon.jpg"))
+            if Image and os.path.exists(icon_path):
+                from PIL import ImageTk
+                img = Image.open(icon_path)
+                self._icon_image = ImageTk.PhotoImage(img)
+                self.root.iconphoto(True, self._icon_image)
         except Exception:
-            return candidates[0] if candidates else "Segoe UI"
+            pass
+
+    def _setup_fonts(self):
+        """设置字体"""
+        import tkinter.font as tkfont
+        available = set(tkfont.families(self.root))
+
+        ui_family = next(
+            (n for n in ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"] if n in available),
+            "Segoe UI",
+        )
+        mono_family = next(
+            (n for n in ["Cascadia Mono", "Consolas", "Courier New"] if n in available),
+            "Consolas",
+        )
+        self.font_ui = ctk.CTkFont(family=ui_family, size=12)
+        self.font_ui_bold = ctk.CTkFont(family=ui_family, size=12, weight="bold")
+        self.font_title = ctk.CTkFont(family=ui_family, size=20, weight="bold")
+        self.font_subtitle = ctk.CTkFont(family=ui_family, size=11)
+        self.font_mono = ctk.CTkFont(family=mono_family, size=11)
+        self.font_section = ctk.CTkFont(family=ui_family, size=13, weight="bold")
 
     def _init_vars(self):
         """初始化 UI 变量"""
-        self.status_var = tk.StringVar(value="就绪")
+        self.status_var = tk.StringVar(value="就绪 Made By wanxiaoT")
 
         # Codex
         self.codex_api_key_var = tk.StringVar()
@@ -117,9 +228,9 @@ class ConfigTool:
         self.codex_model_var = tk.StringVar(value=CODEX_MODEL)
         self.codex_reasoning_var = tk.StringVar(value=CODEX_REASONING)
         self.codex_verbosity_var = tk.StringVar(value=CODEX_VERBOSITY)
-
         self.codex_config_path_var = tk.StringVar(value=str(self.codex_config))
         self.codex_auth_path_var = tk.StringVar(value=str(self.codex_auth))
+        self.codex_model_list = self._load_model_list()
 
         # Claude
         self.claude_token_var = tk.StringVar()
@@ -127,261 +238,410 @@ class ConfigTool:
         self.claude_base_url_var = tk.StringVar(value=CLAUDE_BASE_URL)
         self.claude_opus_var = tk.StringVar(value=CLAUDE_OPUS_MODEL)
         self.claude_disable_traffic_var = tk.BooleanVar(value=CLAUDE_DISABLE_TRAFFIC)
-
         self.claude_config_path_var = tk.StringVar(value=str(self.claude_config))
+
+    # ==================== UI 构建 ====================
 
     def _build_ui(self):
         """构建用户界面"""
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        container = ttk.Frame(self.root, padding=16)
-        container.grid(row=0, column=0, sticky="nsew")
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(2, weight=1)
+        self._container = ctk.CTkFrame(self.root, fg_color="transparent")
+        self._container.grid(row=0, column=0, sticky="nsew", padx=20, pady=12)
+        self._container.columnconfigure(0, weight=1)
+        self._container.rowconfigure(1, weight=1)
 
-        header = ttk.Frame(container)
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
+        self._build_header(self._container)
 
-        ttk.Label(header, text="钠API 配置工具", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(header, text="关于", command=self.show_about).grid(row=0, column=1, rowspan=2, sticky="ne")
-        ttk.Label(
-            header,
-            text="一键配置 Codex 与 Claude Code",
-            style="Subtitle.TLabel",
-        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        # 标签页 - 采用深色背景以确保文字清晰度
+        self.tabview = ctk.CTkTabview(
+            self._container, corner_radius=10, fg_color="#ffffff",
+            border_width=1, border_color="#dbeafe",
+            segmented_button_fg_color="#1e293b",
+            segmented_button_selected_color="#3b82f6",
+            segmented_button_selected_hover_color="#2563eb",
+            segmented_button_unselected_color="#1e293b",
+            segmented_button_unselected_hover_color="#334155",
+        )
+        self.tabview.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        self.tabview.add("Codex")
+        self.tabview.add("Claude Code")
 
-        ttk.Separator(container).grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        self._build_codex_page(self.tabview.tab("Codex"))
+        self._build_claude_page(self.tabview.tab("Claude Code"))
 
-        self.notebook = ttk.Notebook(container)
-        self.notebook.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
-
-        codex_frame = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(codex_frame, text="Codex")
-        self._build_codex_page(codex_frame)
-
-        claude_frame = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(claude_frame, text="Claude Code")
-        self._build_claude_page(claude_frame)
-
-        footer = ttk.Frame(container)
-        footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        # 底部状态栏
+        footer = ctk.CTkFrame(self._container, fg_color="transparent")
+        footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         footer.columnconfigure(0, weight=1)
 
-        ttk.Label(footer, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(footer, text="退出", command=self.root.destroy).grid(row=0, column=1, sticky="e")
+        ctk.CTkLabel(
+            footer, textvariable=self.status_var,
+            font=self.font_subtitle, text_color="#6b7280",
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            footer, text="退出", width=80,
+            **self.SECONDARY_BTN, command=self.root.destroy,
+        ).grid(row=0, column=1, sticky="e")
+
+        self._setup_resize_debounce()
+
+    def _build_header(self, parent):
+        """构建头部"""
+        header = ctk.CTkFrame(parent, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(1, weight=1)
+
+        try:
+            icon_path = _resource_path(os.path.join("assets", "icon.jpg"))
+            if Image and os.path.exists(icon_path):
+                img = Image.open(icon_path)
+                self._header_icon = ctk.CTkImage(
+                    light_image=img, dark_image=img, size=(40, 40),
+                )
+                ctk.CTkLabel(header, image=self._header_icon, text="").grid(
+                    row=0, column=0, rowspan=2, sticky="w", padx=(0, 10),
+                )
+        except Exception:
+            pass
+
+        ctk.CTkLabel(
+            header, text="钠API 配置工具", font=self.font_title,
+            text_color="#101828",
+        ).grid(row=0, column=1, sticky="w")
+        ctk.CTkButton(
+            header, text="关于", width=60,
+            **self.SECONDARY_BTN, command=self.show_about,
+        ).grid(row=0, column=2, rowspan=2, sticky="ne")
+        ctk.CTkLabel(
+            header, text="一键配置 Codex 与 Claude Code",
+            font=self.font_subtitle, text_color="#6b7280",
+        ).grid(row=1, column=1, sticky="w")
+
+    def _create_section(self, parent, title, row):
+        """创建卡片式区块，返回内容 frame"""
+        card = ctk.CTkFrame(parent, corner_radius=8, fg_color="#f0f7ff",
+                            border_width=1, border_color="#dbeafe")
+        card.grid(row=row, column=0, sticky="ew", pady=(8, 0))
+        card.columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            card, text=title, font=self.font_section, anchor="w",
+            text_color="#1a1a2e",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+
+        content = ctk.CTkFrame(card, fg_color="transparent")
+        content.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        content.columnconfigure(1, weight=1)
+        return content
+
+    def _build_path_row(self, parent, label_text, path_var, path_obj, row):
+        """构建文件路径行"""
+        pady = (6, 0) if row > 0 else 0
+
+        ctk.CTkLabel(parent, text=label_text, font=self.font_ui, width=80, anchor="w").grid(
+            row=row, column=0, sticky="w", pady=pady,
+        )
+        entry = ctk.CTkEntry(
+            parent, textvariable=path_var, state="readonly", font=self.font_mono,
+        )
+        entry.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=pady)
+
+        actions = ctk.CTkFrame(parent, fg_color="transparent")
+        actions.grid(row=row, column=2, sticky="e", padx=(8, 0), pady=pady)
+
+        ctk.CTkButton(
+            actions, text="复制", width=50, height=28, **self.SECONDARY_BTN,
+            command=lambda: self._copy_to_clipboard(
+                path_var.get(), f"已复制 {label_text} 路径",
+            ),
+        ).grid(row=0, column=0, padx=(0, 6))
+        ctk.CTkButton(
+            actions, text="打开", width=50, height=28, **self.SECONDARY_BTN,
+            command=lambda: self._open_path(path_obj),
+        ).grid(row=0, column=1)
 
     def _build_codex_page(self, parent):
         """构建 Codex 配置页面"""
         parent.columnconfigure(0, weight=1)
 
-        toolbar = ttk.Frame(parent)
+        # 顶部工具栏
+        toolbar = ctk.CTkFrame(parent, fg_color="transparent")
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.columnconfigure(0, weight=1)
-        ttk.Label(toolbar, text="将写入用户目录下的 .codex 配置文件", style="Subtitle.TLabel").grid(
-            row=0, column=0, sticky="w"
+
+        ctk.CTkLabel(
+            toolbar, text="将写入用户目录下的 .codex 配置文件",
+            font=self.font_subtitle, text_color="#6b7280",
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            toolbar, text="读取现有配置", width=120,
+            **self.SECONDARY_BTN, command=self.load_codex,
+        ).grid(row=0, column=1, sticky="e")
+
+        # API 密钥
+        auth = self._create_section(parent, "API 密钥", 1)
+        auth.columnconfigure(0, weight=1)
+        auth.columnconfigure(1, weight=0)
+
+        # 第一行：标签和操作按钮
+        ctk.CTkLabel(auth, text="API KEY", font=self.font_ui_bold, anchor="w").grid(
+            row=0, column=0, sticky="w",
         )
-        ttk.Button(toolbar, text="读取现有配置", command=self.load_codex).grid(row=0, column=1, sticky="e")
-
-        auth = ttk.Labelframe(parent, text="API密钥", style="Section.TLabelframe")
-        auth.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        auth.columnconfigure(1, weight=1)
-
-        ttk.Label(auth, text="API KEY").grid(row=0, column=0, sticky="w")
-        self.codex_api_key_entry = ttk.Entry(
-            auth,
-            textvariable=self.codex_api_key_var,
-            show="•",
-            style="Mono.TEntry",
-        )
-        self.codex_api_key_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
-
-        auth_actions = ttk.Frame(auth)
-        auth_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(
-            auth_actions,
-            text="粘贴",
+        auth_actions = ctk.CTkFrame(auth, fg_color="transparent")
+        auth_actions.grid(row=0, column=1, sticky="e")
+        ctk.CTkButton(
+            auth_actions, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
             command=lambda: self._paste_from_clipboard(self.codex_api_key_var),
         ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Checkbutton(
-            auth_actions,
-            text="显示",
-            variable=self.codex_show_api_key_var,
-            command=lambda: self._set_secret_visibility(self.codex_api_key_entry, self.codex_show_api_key_var),
+        ctk.CTkCheckBox(
+            auth_actions, text="显示", variable=self.codex_show_api_key_var,
+            command=lambda: self._set_secret_visibility(
+                self.codex_api_key_entry, self.codex_show_api_key_var,
+            ),
+            font=self.font_subtitle,
         ).grid(row=0, column=1)
 
-        settings = ttk.Labelframe(parent, text="模型与参数", style="Section.TLabelframe")
-        settings.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        settings.columnconfigure(1, weight=1)
-
-        ttk.Label(settings, text="Base URL").grid(row=0, column=0, sticky="w")
-        ttk.Entry(settings, textvariable=self.codex_base_url_var, style="Mono.TEntry").grid(
-            row=0, column=1, sticky="ew", padx=(8, 0)
+        # 第二行：输入框铺满
+        self.codex_api_key_entry = ctk.CTkEntry(
+            auth, textvariable=self.codex_api_key_var, show="•", font=self.font_mono,
         )
+        self.codex_api_key_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
-        ttk.Label(settings, text="模型选择").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(settings, textvariable=self.codex_model_var, style="Mono.TEntry").grid(
-            row=1, column=1, sticky="ew", padx=(8, 0), pady=(10, 0)
+        # 模型与参数
+        settings = self._create_section(parent, "模型与参数", 2)
+
+        ctk.CTkLabel(settings, text="Base URL", font=self.font_ui, width=80, anchor="w").grid(
+            row=0, column=0, sticky="w",
         )
+        ctk.CTkEntry(
+            settings, textvariable=self.codex_base_url_var, font=self.font_mono,
+            placeholder_text="https://naapi.cc/v1",
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        ttk.Label(settings, text="Reasoning").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        ttk.Combobox(
-            settings,
-            textvariable=self.codex_reasoning_var,
-            values=["low", "medium", "high", "xhigh"],
-            state="readonly",
-            width=10,
-        ).grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(10, 0))
+        ctk.CTkLabel(settings, text="模型选择", font=self.font_ui, width=80, anchor="w").grid(
+            row=1, column=0, sticky="w", pady=(6, 0),
+        )
+        self.codex_model_combo = _StyledDropdown(
+            settings, variable=self.codex_model_var,
+            values=self.codex_model_list,
+            font=self.font_mono,
+        )
+        self.codex_model_combo.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
 
-        ttk.Label(settings, text="Verbosity").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        ttk.Combobox(
-            settings,
-            textvariable=self.codex_verbosity_var,
+        ctk.CTkLabel(settings, text="推理力度", font=self.font_ui, width=80, anchor="w").grid(
+            row=2, column=0, sticky="w", pady=(6, 0),
+        )
+        ctk.CTkOptionMenu(
+            settings, variable=self.codex_reasoning_var,
+            values=["auto", "low", "medium", "high", "xhigh"],
+            font=self.font_mono,
+        ).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+
+        ctk.CTkLabel(settings, text="详细程度", font=self.font_ui, width=80, anchor="w").grid(
+            row=3, column=0, sticky="w", pady=(6, 0),
+        )
+        ctk.CTkOptionMenu(
+            settings, variable=self.codex_verbosity_var,
             values=["low", "medium", "high"],
-            state="readonly",
-            width=10,
-        ).grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(10, 0))
+            font=self.font_mono,
+        ).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
 
-        files = ttk.Labelframe(parent, text="文件路径", style="Section.TLabelframe")
-        files.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        files.columnconfigure(1, weight=1)
+        # 文件路径
+        files = self._create_section(parent, "文件位置", 3)
+        self._build_path_row(files, "配置文件", self.codex_config_path_var, self.codex_config, 0)
+        self._build_path_row(files, "认证文件", self.codex_auth_path_var, self.codex_auth, 1)
 
-        ttk.Label(files, text="config.toml").grid(row=0, column=0, sticky="w")
-        ttk.Entry(files, textvariable=self.codex_config_path_var, state="readonly", style="Path.TEntry").grid(
-            row=0, column=1, sticky="ew", padx=(8, 0)
-        )
-        codex_cfg_actions = ttk.Frame(files)
-        codex_cfg_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(
-            codex_cfg_actions,
-            text="复制",
-            command=lambda: self._copy_to_clipboard(self.codex_config_path_var.get(), "已复制 config.toml 路径"),
-        ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(codex_cfg_actions, text="打开", command=lambda: self._open_path(self.codex_config)).grid(
-            row=0, column=1
-        )
-
-        ttk.Label(files, text="auth.json").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(files, textvariable=self.codex_auth_path_var, state="readonly", style="Path.TEntry").grid(
-            row=1, column=1, sticky="ew", padx=(8, 0), pady=(10, 0)
-        )
-        codex_auth_actions = ttk.Frame(files)
-        codex_auth_actions.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=(10, 0))
-        ttk.Button(
-            codex_auth_actions,
-            text="复制",
-            command=lambda: self._copy_to_clipboard(self.codex_auth_path_var.get(), "已复制 auth.json 路径"),
-        ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(codex_auth_actions, text="打开", command=lambda: self._open_path(self.codex_auth)).grid(
-            row=0, column=1
-        )
-
-        actions = ttk.Frame(parent)
-        actions.grid(row=4, column=0, sticky="ew", pady=(16, 0))
-        actions.columnconfigure(0, weight=1)
-        ttk.Button(
-            actions,
-            text="写入 Codex 配置",
-            style="Primary.TButton",
-            command=self.write_codex,
-        ).grid(row=0, column=0, sticky="e")
+        # 写入按钮
+        ctk.CTkButton(
+            parent, text="写入 Codex 配置", font=self.font_ui,
+            height=40, corner_radius=8, command=self.write_codex,
+        ).grid(row=4, column=0, sticky="e", pady=(16, 0))
 
     def _build_claude_page(self, parent):
         """构建 Claude Code 配置页面"""
         parent.columnconfigure(0, weight=1)
 
-        toolbar = ttk.Frame(parent)
+        toolbar = ctk.CTkFrame(parent, fg_color="transparent")
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.columnconfigure(0, weight=1)
-        ttk.Label(toolbar, text="将写入用户目录下的 .claude 配置文件", style="Subtitle.TLabel").grid(
-            row=0, column=0, sticky="w"
+
+        ctk.CTkLabel(
+            toolbar, text="将写入用户目录下的 .claude 配置文件",
+            font=self.font_subtitle, text_color="#6b7280",
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            toolbar, text="读取现有配置", width=120,
+            **self.SECONDARY_BTN, command=self.load_claude,
+        ).grid(row=0, column=1, sticky="e")
+
+        # API 密钥
+        auth = self._create_section(parent, "API 密钥", 1)
+        auth.columnconfigure(0, weight=1)
+        auth.columnconfigure(1, weight=0)
+
+        # 第一行：标签和操作按钮
+        ctk.CTkLabel(auth, text="认证令牌", font=self.font_ui_bold, anchor="w").grid(
+            row=0, column=0, sticky="w",
         )
-        ttk.Button(toolbar, text="读取现有配置", command=self.load_claude).grid(row=0, column=1, sticky="e")
-
-        auth = ttk.Labelframe(parent, text="API密钥", style="Section.TLabelframe")
-        auth.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        auth.columnconfigure(1, weight=1)
-
-        ttk.Label(auth, text="ANTHROPIC_AUTH_TOKEN").grid(row=0, column=0, sticky="w")
-        self.claude_token_entry = ttk.Entry(
-            auth,
-            textvariable=self.claude_token_var,
-            show="•",
-            style="Mono.TEntry",
-        )
-        self.claude_token_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
-
-        auth_actions = ttk.Frame(auth)
-        auth_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(
-            auth_actions,
-            text="粘贴",
+        auth_actions = ctk.CTkFrame(auth, fg_color="transparent")
+        auth_actions.grid(row=0, column=1, sticky="e")
+        ctk.CTkButton(
+            auth_actions, text="粘贴", width=50, height=24, **self.SECONDARY_BTN,
             command=lambda: self._paste_from_clipboard(self.claude_token_var),
         ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Checkbutton(
-            auth_actions,
-            text="显示",
-            variable=self.claude_show_token_var,
-            command=lambda: self._set_secret_visibility(self.claude_token_entry, self.claude_show_token_var),
+        ctk.CTkCheckBox(
+            auth_actions, text="显示", variable=self.claude_show_token_var,
+            command=lambda: self._set_secret_visibility(
+                self.claude_token_entry, self.claude_show_token_var,
+            ),
+            font=self.font_subtitle,
         ).grid(row=0, column=1)
 
-        settings = ttk.Labelframe(parent, text="连接与模型", style="Section.TLabelframe")
-        settings.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        settings.columnconfigure(1, weight=1)
+        # 第二行：输入框铺满
+        self.claude_token_entry = ctk.CTkEntry(
+            auth, textvariable=self.claude_token_var, show="•", font=self.font_mono,
+        )
+        self.claude_token_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
-        ttk.Label(settings, text="ANTHROPIC_BASE_URL").grid(row=0, column=0, sticky="w")
-        ttk.Entry(settings, textvariable=self.claude_base_url_var, style="Mono.TEntry").grid(
-            row=0, column=1, sticky="ew", padx=(8, 0)
+        # 连接与模型
+        settings = self._create_section(parent, "连接与模型", 2)
+
+        ctk.CTkLabel(settings, text="API 地址", font=self.font_ui, width=80, anchor="w").grid(
+            row=0, column=0, sticky="w",
+        )
+        ctk.CTkEntry(
+            settings, textvariable=self.claude_base_url_var, font=self.font_mono,
+            placeholder_text="https://naapi.cc",
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        ctk.CTkLabel(settings, text="默认模型", font=self.font_ui, width=80, anchor="w").grid(
+            row=1, column=0, sticky="w", pady=(6, 0),
+        )
+        ctk.CTkEntry(
+            settings, textvariable=self.claude_opus_var, font=self.font_mono,
+        ).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+
+        # 选项
+        options = self._create_section(parent, "选项", 3)
+        ctk.CTkCheckBox(
+            options, text="开启离线模式（使用钠API必须勾选）",
+            variable=self.claude_disable_traffic_var, font=self.font_ui,
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        # 文件路径
+        files = self._create_section(parent, "文件位置", 4)
+        self._build_path_row(
+            files, "配置文件", self.claude_config_path_var, self.claude_config, 0,
         )
 
-        ttk.Label(settings, text="OPUS Model").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(settings, textvariable=self.claude_opus_var, style="Mono.TEntry").grid(
-            row=1, column=1, sticky="ew", padx=(8, 0), pady=(10, 0)
-        )
+        # 写入按钮
+        ctk.CTkButton(
+            parent, text="写入 Claude Code 配置", font=self.font_ui_bold,
+            height=40, corner_radius=8, command=self.write_claude,
+        ).grid(row=5, column=0, sticky="e", pady=(16, 0))
 
-        options = ttk.Labelframe(parent, text="选项", style="Section.TLabelframe")
-        options.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        options.columnconfigure(0, weight=1)
+    # ==================== 缩放防抖 ====================
 
-        ttk.Checkbutton(options, text="开启离线模式（使用钠API必须勾选）", variable=self.claude_disable_traffic_var).grid(
-            row=0, column=0, sticky="w"
-        )
+    def _setup_resize_debounce(self):
+        """初始化窗口缩放防抖，减少 customtkinter 重绘卡顿"""
+        self._resize_job = None
+        self._is_resizing = False
+        self._prev_size = None
+        self.root.bind("<Configure>", self._on_configure)
 
-        files = ttk.Labelframe(parent, text="文件路径", style="Section.TLabelframe")
-        files.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        files.columnconfigure(1, weight=1)
+    def _on_configure(self, event):
+        if event.widget is not self.root:
+            return
+        current_size = (event.width, event.height)
+        if self._prev_size is None:
+            self._prev_size = current_size
+            return
+        if current_size == self._prev_size:
+            return
+        self._prev_size = current_size
+        if self._resize_job is not None:
+            self.root.after_cancel(self._resize_job)
+        if not self._is_resizing:
+            self._is_resizing = True
+            self._container.grid_remove()
+        self._resize_job = self.root.after(100, self._finish_resize)
 
-        ttk.Label(files, text="settings.json").grid(row=0, column=0, sticky="w")
-        ttk.Entry(files, textvariable=self.claude_config_path_var, state="readonly", style="Path.TEntry").grid(
-            row=0, column=1, sticky="ew", padx=(8, 0)
-        )
-        claude_cfg_actions = ttk.Frame(files)
-        claude_cfg_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(
-            claude_cfg_actions,
-            text="复制",
-            command=lambda: self._copy_to_clipboard(self.claude_config_path_var.get(), "已复制 settings.json 路径"),
-        ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(claude_cfg_actions, text="打开", command=lambda: self._open_path(self.claude_config)).grid(
-            row=0, column=1
-        )
+    def _finish_resize(self):
+        self._resize_job = None
+        self._is_resizing = False
+        self._container.grid(row=0, column=0, sticky="nsew", padx=20, pady=12)
 
-        actions = ttk.Frame(parent)
-        actions.grid(row=5, column=0, sticky="ew", pady=(16, 0))
-        actions.columnconfigure(0, weight=1)
-        ttk.Button(
-            actions,
-            text="写入 Claude Code 配置",
-            style="Primary.TButton",
-            command=self.write_claude,
-        ).grid(row=0, column=0, sticky="e")
+    def _load_model_list(self):
+        """从 naapigpt 加载模型列表"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "naapigpt")
+        if os.path.exists(path):
+            try:
+                content = Path(path).read_text(encoding="utf-8")
+                # 支持逗号、换行分隔
+                models = [m.strip() for m in re.split(r'[,\n]', content) if m.strip()]
+                return models if models else [CODEX_MODEL]
+            except Exception:
+                pass
+        return [CODEX_MODEL]
+
+    # ==================== 业务逻辑 ====================
 
     def _update_status(self, message):
         self.status_var.set(message)
 
+    def _show_toast(self, message, toast_type="info", duration=3500):
+        """显示右上角 toast 通知，自动消失"""
+        old = getattr(self, "_current_toast", None)
+        if old:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
+        colors = {
+            "success": ("#f0fdf4", "#22c55e"),
+            "error":   ("#fef2f2", "#ef4444"),
+            "warning": ("#fffbeb", "#f59e0b"),
+            "info":    ("#eff6ff", "#3b82f6"),
+        }
+        bg, accent = colors.get(toast_type, colors["info"])
+
+        toast = ctk.CTkFrame(
+            self.root, fg_color=bg, border_color=accent,
+            border_width=2, corner_radius=8,
+        )
+        toast.place(relx=1.0, rely=0.0, anchor="ne", x=-24, y=16)
+        toast.lift()
+
+        bar = ctk.CTkFrame(toast, fg_color=accent, width=4, height=1, corner_radius=2)
+        bar.grid(row=0, column=0, sticky="ns", padx=(10, 0), pady=10)
+
+        lbl = ctk.CTkLabel(
+            toast, text=message, text_color="#1f2937",
+            font=self.font_ui, wraplength=320, justify="left",
+        )
+        lbl.grid(row=0, column=1, padx=(8, 16), pady=10, sticky="w")
+
+        for w in (toast, bar, lbl):
+            w.bind("<Button-1>", lambda e, t=toast: self._dismiss_toast(t))
+
+        self._current_toast = toast
+        if duration > 0:
+            self.root.after(duration, lambda t=toast: self._dismiss_toast(t))
+
+    def _dismiss_toast(self, toast):
+        """关闭 toast"""
+        try:
+            toast.destroy()
+        except Exception:
+            pass
+        if getattr(self, "_current_toast", None) is toast:
+            self._current_toast = None
+
     def show_about(self):
-        messagebox.showinfo("关于", "钠API 配置工具\n作者：wanxiaoT\n官网：na.wanxiaot.com")
+        self._show_toast("钠API 配置工具\n作者：wanxiaoT\n官网：naapi.cc", "info", 5000)
 
     def _copy_to_clipboard(self, text, status_message="已复制到剪贴板"):
         try:
@@ -390,13 +650,13 @@ class ConfigTool:
             self.root.update_idletasks()
             self._update_status(status_message)
         except Exception as e:
-            messagebox.showerror("错误", f"复制失败: {e}")
+            self._show_toast(f"复制失败: {e}", "error")
 
     def _paste_from_clipboard(self, target_var):
         try:
             text = self.root.clipboard_get()
         except tk.TclError:
-            messagebox.showwarning("提示", "剪贴板为空")
+            self._show_toast("剪贴板为空", "warning")
             return
         target_var.set(text.strip())
         self._update_status("已从剪贴板粘贴")
@@ -415,14 +675,16 @@ class ConfigTool:
                 subprocess.run(["xdg-open", str(target)], check=False)
             self._update_status(f"已打开: {target}")
         except Exception as e:
-            messagebox.showerror("错误", f"无法打开: {e}")
+            self._show_toast(f"无法打开: {e}", "error")
 
     def _toml_get(self, text, key):
-        match = re.search(rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"\s*$', text, flags=re.MULTILINE)
+        match = re.search(
+            rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"\s*$', text, flags=re.MULTILINE,
+        )
         return match.group(1) if match else None
 
     def load_codex(self):
-        """从本机配置读取 Codex 字段（含 auth.json）"""
+        """从本机配置读取 Codex 字段"""
         try:
             if self.codex_config.exists():
                 text = self.codex_config.read_text(encoding="utf-8", errors="ignore")
@@ -441,25 +703,29 @@ class ConfigTool:
                     self.codex_verbosity_var.set(verbosity)
 
             if self.codex_auth.exists():
-                data = json.loads(self.codex_auth.read_text(encoding="utf-8", errors="ignore"))
+                data = json.loads(
+                    self.codex_auth.read_text(encoding="utf-8", errors="ignore"),
+                )
                 key = (data.get("OPENAI_API_KEY") or "").strip()
                 if key:
                     self.codex_api_key_var.set(key)
 
             self._update_status("已读取 Codex 配置")
-            messagebox.showinfo("已读取", "已从本机配置文件读取 Codex 配置。")
+            self._show_toast("已从本机读取 Codex 配置", "success")
         except Exception as e:
             self._update_status("读取 Codex 失败")
-            messagebox.showerror("错误", f"读取失败: {e}")
+            self._show_toast(f"读取失败: {e}", "error")
 
     def load_claude(self):
-        """从本机配置读取 Claude Code 字段（settings.json）"""
+        """从本机配置读取 Claude Code 字段"""
         try:
             if not self.claude_config.exists():
-                messagebox.showwarning("提示", "未找到 settings.json")
+                self._show_toast("未找到 settings.json", "warning")
                 return
 
-            data = json.loads(self.claude_config.read_text(encoding="utf-8", errors="ignore"))
+            data = json.loads(
+                self.claude_config.read_text(encoding="utf-8", errors="ignore"),
+            )
             env = data.get("env") or {}
 
             base_url = (env.get("ANTHROPIC_BASE_URL") or "").strip()
@@ -478,28 +744,25 @@ class ConfigTool:
                 self.claude_disable_traffic_var.set(str(disable_traffic).strip() == "1")
 
             self._update_status("已读取 Claude Code 配置")
-            messagebox.showinfo("已读取", "已从本机配置文件读取 Claude Code 配置。")
+            self._show_toast("已从本机读取 Claude Code 配置", "success")
         except Exception as e:
             self._update_status("读取 Claude 失败")
-            messagebox.showerror("错误", f"读取失败: {e}")
+            self._show_toast(f"读取失败: {e}", "error")
 
     def _confirm_overwrite(self, files):
-        """确认是否覆盖已存在的文件"""
         existing = [str(f) for f in files if f.exists()]
         if not existing:
             return True
         return messagebox.askyesno(
             "确认覆盖",
-            "以下文件已存在，是否覆盖？\n\n" + "\n".join(existing)
+            "以下文件已存在，是否覆盖？\n\n" + "\n".join(existing),
         )
 
     def _save_text(self, path, content):
-        """保存文本文件"""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
     def _save_json(self, path, data):
-        """保存 JSON 文件"""
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -507,10 +770,9 @@ class ConfigTool:
 
     def write_codex(self):
         """写入 Codex 配置"""
-        # 验证 API Key
         api_key = self.codex_api_key_var.get().strip()
         if not api_key or api_key == "sk-":
-            messagebox.showerror("错误", "请输入有效的 OPENAI_API_KEY")
+            self._show_toast("请输入有效的 OPENAI_API_KEY", "error")
             self._update_status("缺少 OPENAI_API_KEY")
             return
 
@@ -519,13 +781,11 @@ class ConfigTool:
                 self._update_status("已取消写入")
                 return
 
-        # 确认覆盖
         if not self._confirm_overwrite([self.codex_config, self.codex_auth]):
             self._update_status("已取消写入")
             return
 
         try:
-            # 生成 config.toml
             base_url = self.codex_base_url_var.get().strip() or CODEX_BASE_URL
             model = self.codex_model_var.get().strip() or CODEX_MODEL
             reasoning = self.codex_reasoning_var.get().strip() or CODEX_REASONING
@@ -546,39 +806,32 @@ wire_api = "responses"
 requires_openai_auth = true
 '''
 
-            # 写入文件
             self._save_text(self.codex_config, config_content)
             self._save_json(self.codex_auth, {"OPENAI_API_KEY": api_key})
 
             self._update_status("Codex 配置已写入")
-            messagebox.showinfo(
-                "成功",
-                f"Codex 配置已写入:\n\n📁 {self.codex_config}\n📁 {self.codex_auth}"
-            )
+            self._show_toast("Codex 配置已写入", "success")
 
         except PermissionError:
             self._update_status("写入失败：权限不足")
-            messagebox.showerror("错误", "没有写入权限,请以管理员身份运行")
+            self._show_toast("没有写入权限，请以管理员身份运行", "error")
         except Exception as e:
             self._update_status("写入失败")
-            messagebox.showerror("错误", f"写入失败: {e}")
+            self._show_toast(f"写入失败: {e}", "error")
 
     def write_claude(self):
         """写入 Claude Code 配置"""
-        # 验证 Token
         token = self.claude_token_var.get().strip()
         if not token:
-            messagebox.showerror("错误", "请输入有效的 ANTHROPIC_AUTH_TOKEN")
+            self._show_toast("请输入有效的 ANTHROPIC_AUTH_TOKEN", "error")
             self._update_status("缺少 ANTHROPIC_AUTH_TOKEN")
             return
 
-        # 确认覆盖
         if not self._confirm_overwrite([self.claude_config]):
             self._update_status("已取消写入")
             return
 
         try:
-            # 生成配置
             base_url = self.claude_base_url_var.get().strip() or CLAUDE_BASE_URL
             opus = self.claude_opus_var.get().strip() or CLAUDE_OPUS_MODEL
 
@@ -591,32 +844,23 @@ requires_openai_auth = true
             if self.claude_disable_traffic_var.get():
                 env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 
-            config = {
-                "env": env
-            }
-
-            # 写入文件
+            config = {"env": env}
             self._save_json(self.claude_config, config)
 
             self._update_status("Claude Code 配置已写入")
-            messagebox.showinfo(
-                "成功",
-                f"Claude Code 配置已写入:\n\n📁 {self.claude_config}"
-            )
+            self._show_toast("Claude Code 配置已写入", "success")
 
         except PermissionError:
             self._update_status("写入失败：权限不足")
-            messagebox.showerror("错误", "没有写入权限,请以管理员身份运行")
+            self._show_toast("没有写入权限，请以管理员身份运行", "error")
         except Exception as e:
             self._update_status("写入失败")
-            messagebox.showerror("错误", f"写入失败: {e}")
+            self._show_toast(f"写入失败: {e}", "error")
 
     def run(self):
         """运行程序"""
-        # 计算窗口大小并居中
-        self.root.update_idletasks()
-        width = max(self.root.winfo_reqwidth() + 80, 720)
-        height = max(self.root.winfo_reqheight() + 80, 580)
+        width = 520
+        height = 600
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -624,7 +868,8 @@ requires_openai_auth = true
         y = (screen_h - height) // 2
 
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self.root.minsize(720, 580)
+        self.root.minsize(500, 580)
+        signal.signal(signal.SIGINT, lambda *_: self.root.destroy())
         self.root.mainloop()
 
 

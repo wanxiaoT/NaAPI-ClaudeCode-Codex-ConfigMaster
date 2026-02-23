@@ -5,7 +5,8 @@
       "Bash(dir /s \"C:\\\\1Git\\\\pyNAAPI\\\\__pycache__\\\\NaAPICodex*.pyc\")",
       "Bash(dir \"C:\\\\1Git\\\\pyNAAPI\\\\__pycache__\")",
       "Bash(pip show:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(python:*)"
     ]
   }
 }

@@ -3,7 +3,7 @@
 ## PyInstaller 打包命令
 
 ```bash
-pyinstaller --onefile --windowed --name "NaAPICodex" NaAPICodex.py
+pyinstaller --onefile --windowed --collect-all customtkinter --name "NaAPICodex" NaAPICodex.py
 ```
 
 ### 参数说明
