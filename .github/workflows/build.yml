@@ -32,7 +32,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          ARGS="--onefile --windowed --collect-all customtkinter --name NaAPICodex"
+          ARGS="--onefile --windowed --collect-all customtkinter --icon assets/icon.ico --name NaAPICodex"
           [ -d assets ] && ARGS="$ARGS --add-data assets${{ matrix.sep }}assets"
           [ -f naapigpt ] && ARGS="$ARGS --add-data naapigpt${{ matrix.sep }}."
           pyinstaller $ARGS NaAPICodex.py

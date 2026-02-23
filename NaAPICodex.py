@@ -433,7 +433,7 @@ class ConfigTool:
         ctk.CTkLabel(settings, text="推理力度", font=self.font_ui, width=80, anchor="w").grid(
             row=2, column=0, sticky="w", pady=(6, 0),
         )
-        ctk.CTkOptionMenu(
+        _StyledDropdown(
             settings, variable=self.codex_reasoning_var,
             values=["auto", "low", "medium", "high", "xhigh"],
             font=self.font_mono,
@@ -442,7 +442,7 @@ class ConfigTool:
         ctk.CTkLabel(settings, text="详细程度", font=self.font_ui, width=80, anchor="w").grid(
             row=3, column=0, sticky="w", pady=(6, 0),
         )
-        ctk.CTkOptionMenu(
+        _StyledDropdown(
             settings, variable=self.codex_verbosity_var,
             values=["low", "medium", "high"],
             font=self.font_mono,
