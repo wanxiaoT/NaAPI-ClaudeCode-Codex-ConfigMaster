@@ -56,8 +56,10 @@ jobs:
         run: |
           cd dist
           if [ -d NaAPICodex.app ]; then
-            zip -r NaAPICodex-macOS.zip NaAPICodex.app
-            rm -rf NaAPICodex.app
+            cp ../launch_mac.command .
+            chmod +x launch_mac.command
+            zip -r NaAPICodex-macOS.zip NaAPICodex.app launch_mac.command
+            rm -rf NaAPICodex.app launch_mac.command
           fi
           if [ -f NaAPICodex.exe ]; then
             mv NaAPICodex.exe NaAPICodex-Windows.exe

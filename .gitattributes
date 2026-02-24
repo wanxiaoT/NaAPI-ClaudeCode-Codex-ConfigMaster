@@ -1,0 +1,3 @@
+# Mac shell 脚本强制使用 LF 换行符
+*.command text eol=lf
+*.sh text eol=lf
